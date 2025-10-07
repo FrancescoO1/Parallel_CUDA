@@ -1,1 +1,5 @@
 .idea/workspace.xml~
+/archive
+/immagini_output_cpu
+/immagini_output_gpu
+/cmake-build-debug

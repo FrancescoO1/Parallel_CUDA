@@ -1,35 +1,40 @@
 #ifndef IMAGE_H
 #define IMAGE_H
 
-#include <vector>
 #include <string>
+#include <vector>
 
 class Image {
-public:
-    std::vector<unsigned char> data;
+private:
     int width;
     int height;
     int channels;
+    unsigned char* data;
 
-    // Costruttori
-    Image();
-    Image(int w, int h, int c);
+public:
+    explicit Image(const std::string& filename);
+    Image(int width, int height, int channels);
+    ~Image();
 
-    // Metodi per I/O
-    bool loadFromFile(const std::string& filename);
-    bool saveToFile(const std::string& filename) const;
+    // Copy constructor e assignment operator
+    Image(const Image& other);
+    Image& operator=(const Image& other);
 
-    // Utility
-    bool isEmpty() const;
-    long getTotalPixels() const;
-    void clear();
+    // Move semantics (opzionale per C++11+)
+    Image(Image&& other) noexcept = delete;
+    Image& operator=(Image&& other) noexcept = delete;
 
-    // Conversione a grayscale
-    Image convertToGrayscale() const;
+    std::vector<float> toGrayscaleFloat() const;
 
-private:
-    // Metodi privati per gestione memoria
-    void allocateData();
+    static void saveGrayscaleFloat(const std::vector<float>& grayscaleData,
+                                  int width, int height, const std::string& filename);
+
+    bool save(const std::string& filename) const;
+
+    int getWidth() const;
+    int getHeight() const;
+    int getChannels() const;
+    unsigned char* getData() const;
 };
 
 #endif // IMAGE_H

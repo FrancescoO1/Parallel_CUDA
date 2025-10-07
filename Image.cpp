@@ -1,106 +1,107 @@
 #include "Image.h"
+#include <stdexcept>
+#include <algorithm>
 #include <iostream>
 
-// Header-only libraries per I/O immagini
 #define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image.h"
 #include "stb_image_write.h"
 
-// Costruttori
-Image::Image() : width(0), height(0), channels(0) {}
+Image::Image(const std::string& filename) {
+    int channels_in_file;
+    data = stbi_load(filename.c_str(), &width, &height, &channels_in_file, 0);
+
+    if (!data) {
+        throw std::runtime_error("Failed to load image: " + filename);
+    }
+
+    channels = channels_in_file;
+
+    std::cout << "Loaded image: " << filename
+              << " (" << width << "x" << height << ", " << channels << " channels)" << std::endl;
+}
 
 Image::Image(int w, int h, int c) : width(w), height(h), channels(c) {
-    allocateData();
+    size_t size = width * height * channels;
+    data = new unsigned char[size];
 }
 
-// Carica immagine da file
-bool Image::loadFromFile(const std::string& filename) {
-    clear();
-    
-    unsigned char* raw_data = stbi_load(filename.c_str(), &width, &height, &channels, 0);
-    if (!raw_data) {
-        std::cerr << "Errore nel caricamento dell'immagine: " << filename << std::endl;
-        return false;
+Image::~Image() {
+    if (data) {
+        stbi_image_free(data);
     }
-    
-    std::cout << "Caricata immagine: " << filename 
-              << " (" << width << "x" << height 
-              << ", " << channels << " canali)" << std::endl;
-    
-    // Copia i dati nel vettore
-    size_t total_size = width * height * channels;
-    data.resize(total_size);
-    for (size_t i = 0; i < total_size; i++) {
-        data[i] = raw_data[i];
+}
+
+Image::Image(const Image& other)
+    : width(other.width), height(other.height), channels(other.channels) {
+    size_t size = width * height * channels;
+    data = new unsigned char[size];
+    std::copy(other.data, other.data + size, data);
+}
+
+Image& Image::operator=(const Image& other) {
+    if (this != &other) {
+        if (data) {
+            stbi_image_free(data);
+        }
+
+        width = other.width;
+        height = other.height;
+        channels = other.channels;
+
+        size_t size = width * height * channels;
+        data = new unsigned char[size];
+        std::copy(other.data, other.data + size, data);
     }
-    
-    stbi_image_free(raw_data);
-    return true;
+    return *this;
 }
 
-// Salva immagine su file
-bool Image::saveToFile(const std::string& filename) const {
-    if (isEmpty()) {
-        std::cerr << "Impossibile salvare immagine vuota" << std::endl;
-        return false;
-    }
-    
-    int result = stbi_write_png(filename.c_str(), width, height, 
-                               channels, data.data(), width * channels);
-    return result != 0;
-}
+std::vector<float> Image::toGrayscaleFloat() const {
+    std::vector<float> grayscale(width * height);
 
-// Verifica se l'immagine è vuota
-bool Image::isEmpty() const {
-    return data.empty() || width == 0 || height == 0;
-}
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            int idx = y * width + x;
+            int pixel_idx = idx * channels;
 
-// Ottieni numero totale di pixel
-long Image::getTotalPixels() const {
-    return static_cast<long>(width) * height;
-}
-
-// Pulisci l'immagine
-void Image::clear() {
-    data.clear();
-    width = height = channels = 0;
-}
-
-// Converti in grayscale
-Image Image::convertToGrayscale() const {
-    if (isEmpty()) {
-        return Image();
-    }
-    
-    Image grayscale(width, height, 1);
-    
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            int src_idx = (y * width + x) * channels;
-            int dst_idx = y * width + x;
-            
-            if (channels >= 3) {
-                // Conversione RGB a grayscale usando formula standard
-                unsigned char r = data[src_idx];
-                unsigned char g = data[src_idx + 1];
-                unsigned char b = data[src_idx + 2];
-                grayscale.data[dst_idx] = static_cast<unsigned char>(
-                    0.299f * r + 0.587f * g + 0.114f * b
-                );
-            } else {
-                // Già in grayscale
-                grayscale.data[dst_idx] = data[src_idx];
+            if (channels == 1) {
+                grayscale[idx] = static_cast<float>(data[pixel_idx]);
+            } else if (channels >= 3) {
+                float r = static_cast<float>(data[pixel_idx]);
+                float g = static_cast<float>(data[pixel_idx + 1]);
+                float b = static_cast<float>(data[pixel_idx + 2]);
+                grayscale[idx] = 0.299f * r + 0.587f * g + 0.114f * b;
             }
         }
     }
-    
+
     return grayscale;
 }
 
-// Alloca memoria per i dati
-void Image::allocateData() {
-    if (width > 0 && height > 0 && channels > 0) {
-        data.resize(width * height * channels);
+void Image::saveGrayscaleFloat(const std::vector<float>& grayscaleData,
+                              int width, int height, const std::string& filename) {
+    std::vector<unsigned char> imageData(width * height);
+
+    for (size_t i = 0; i < grayscaleData.size(); ++i) {
+        float value = grayscaleData[i];
+        // Clamp tra 0 e 255 e converti a unsigned char
+        value = std::max(0.0f, std::min(255.0f, value));
+        imageData[i] = static_cast<unsigned char>(value + 0.5f); // Rounded conversion
     }
+
+    if (!stbi_write_png(filename.c_str(), width, height, 1, imageData.data(), width)) {
+        throw std::runtime_error("Failed to save image: " + filename);
+    }
+
+    std::cout << "Saved image: " << filename << std::endl;
 }
+
+bool Image::save(const std::string& filename) const {
+    return stbi_write_png(filename.c_str(), width, height, channels, data, width * channels);
+}
+
+int Image::getWidth() const { return width; }
+int Image::getHeight() const { return height; }
+int Image::getChannels() const { return channels; }
+unsigned char* Image::getData() const { return data; }

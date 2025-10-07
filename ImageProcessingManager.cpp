@@ -1,162 +1,176 @@
 #include "ImageProcessingManager.h"
 #include <iostream>
-#include <functional>
+#include <iomanip>
+#include <algorithm>
+#include <numeric>
+#include <cmath>
 
-// Costruttore
-ImageProcessingManager::ImageProcessingManager() : default_num_runs(25) {
-    printHeader();
+ImageProcessingManager::ProcessingResult
+ImageProcessingManager::processImageBenchmark(const Image& image, int run_number) {
+    ProcessingResult result;
+
+    // Converti l'immagine in grayscale se necessario
+    std::vector<float> grayscale = image.toGrayscaleFloat();
+    result.total_pixels = image.getWidth() * image.getHeight();
+
+    // Misurazione del tempo
+    auto start = monitor.getCurrentTime();
+
+    std::vector<float> processed = processor.applySharpenFilter(
+        grayscale, image.getWidth(), image.getHeight());
+
+    auto end = monitor.getCurrentTime();
+
+    result.execution_time_ms = monitor.calculateDuration(start, end);
+    result.throughput_mps = (result.total_pixels / 1e6) / (result.execution_time_ms / 1000.0);
+
+    std::cout << "Run " << std::setw(2) << run_number
+              << " - Time: " << std::fixed << std::setprecision(2) << result.execution_time_ms << " ms"
+              << " - Throughput: " << std::setprecision(1) << result.throughput_mps << " MP/s"
+              << std::endl;
+
+    return result;
 }
 
-// Elabora una singola immagine
-bool ImageProcessingManager::processSingleImage(const std::string& input_filename, 
-                                               const std::string& output_filename, 
-                                               int num_runs) {
-    // Carica immagine
-    Image input_img;
-    if (!input_img.loadFromFile(input_filename)) {
-        std::cerr << "Impossibile caricare l'immagine: " << input_filename << std::endl;
-        return false;
-    }
-    
-    // Converti in grayscale se necessario
-    Image grayscale_img = input_img.convertToGrayscale();
-    if (grayscale_img.isEmpty()) {
-        std::cerr << "Errore nella conversione a grayscale" << std::endl;
-        return false;
-    }
-    
-    long total_pixels = grayscale_img.getTotalPixels();
-    std::cout << "Pixel totali: " << total_pixels << std::endl;
-    
-    // Prepara il task di elaborazione
-    Image output_img;
-    std::function<void()> processing_task = [&]() {
-        output_img = processor.applySharpenKernel(grayscale_img);
-    };
-    
-    // Esegui misurazioni multiple
-    PerformanceMonitor::Statistics stats = monitor.measureMultipleRuns(
-        processing_task, total_pixels, num_runs);
-    
-    // Stampa statistiche
-    monitor.printStatistics(stats);
-    
-    // Salva immagine risultante
-    if (output_img.saveToFile(output_filename)) {
-        std::cout << "Immagine salvata: " << output_filename << std::endl;
-        return true;
-    } else {
-        std::cerr << "Errore nel salvataggio di: " << output_filename << std::endl;
-        return false;
-    }
-}
-
-// Elabora multiple immagini con 25 run completi
-void ImageProcessingManager::processMultipleImages(const std::vector<std::string>& input_filenames,
-                                                  int num_runs) {
-    // Carica tutte le immagini prima di iniziare
-    std::vector<Image> input_images;
-    std::vector<Image> grayscale_images;
-    long total_pixels = 0;
-
-    std::cout << "=== Caricamento immagini ===" << std::endl;
-    for (size_t i = 0; i < input_filenames.size(); i++) {
-        const std::string& filename = input_filenames[i];
-
-        std::cout << "Caricando immagine " << (i + 1) << ": " << filename << std::endl;
-
-        Image input_img;
-        if (!input_img.loadFromFile(filename)) {
-            std::cerr << "Impossibile caricare l'immagine: " << filename << std::endl;
-            continue;
-        }
-
-        // Converti in grayscale
-        Image grayscale_img = input_img.convertToGrayscale();
-        if (grayscale_img.isEmpty()) {
-            std::cerr << "Errore nella conversione a grayscale: " << filename << std::endl;
-            continue;
-        }
-
-        input_images.push_back(std::move(input_img));
-        grayscale_images.push_back(std::move(grayscale_img));
-        total_pixels += grayscale_images.back().getTotalPixels();
-
-        std::cout << "  Dimensioni: " << grayscale_images.back().width
-                  << "x" << grayscale_images.back().height
-                  << ", Pixel: " << grayscale_images.back().getTotalPixels() << std::endl;
-    }
-
-    if (grayscale_images.empty()) {
-        std::cerr << "Nessuna immagine caricata con successo!" << std::endl;
+void ImageProcessingManager::processImages(const std::vector<std::string>& imagePaths) {
+    if (imagePaths.empty()) {
+        std::cout << "No images to process." << std::endl;
         return;
     }
 
-    std::cout << "\nImmagini caricate: " << grayscale_images.size() << std::endl;
-    std::cout << "Pixel totali: " << total_pixels << std::endl;
+    std::cout << "\n=== CPU Sequential Batch Image Processing ===" << std::endl;
+    std::cout << "Processing " << imagePaths.size() << " images, 25 runs each" << std::endl;
 
-    // Prepara il task di elaborazione per TUTTE le immagini in sequenza
-    std::vector<Image> output_images(grayscale_images.size());
+    std::vector<ProcessingResult> all_results;
+    size_t total_pixels_per_run = 0;
 
-    std::function<void()> batch_processing_task = [&]() {
-        // Elabora TUTTE le immagini in sequenza durante ogni run
-        for (size_t i = 0; i < grayscale_images.size(); i++) {
-            output_images[i] = processor.applySharpenKernel(grayscale_images[i]);
-        }
-    };
-
-    std::cout << "\n=== Elaborazione Batch (" << num_runs << " run completi) ===" << std::endl;
-
-    // Esegui misurazioni multiple SUL BATCH COMPLETO
-    PerformanceMonitor::Statistics stats = monitor.measureMultipleRuns(
-        batch_processing_task, total_pixels, num_runs);
-
-    // Stampa statistiche
-    monitor.printStatistics(stats);
-
-    // Salva immagini risultanti
-    std::cout << "\n=== Salvataggio immagini elaborate ===" << std::endl;
-    for (size_t i = 0; i < output_images.size(); i++) {
-        std::string output_filename = generateOutputFilename(i + 1);
-
-        if (output_images[i].saveToFile(output_filename)) {
-            std::cout << "Immagine salvata: " << output_filename << std::endl;
-        } else {
-            std::cerr << "Errore nel salvataggio di: " << output_filename << std::endl;
-        }
+    // Prima, carica tutte le immagini e calcola i pixel totali
+    std::vector<Image> images;
+    for (const auto& path : imagePaths) {
+        images.emplace_back(path);
+        total_pixels_per_run += images.back().getWidth() * images.back().getHeight();
+        std::cout << "Loaded: " << path << " ("
+                  << images.back().getWidth() << "x" << images.back().getHeight() << ")" << std::endl;
     }
-    
-    printCompletion();
-}
 
-// Configura numero di run
-void ImageProcessingManager::setNumRuns(int runs) {
-    if (runs > 0) {
-        default_num_runs = runs;
+    std::cout << "\nStarting benchmark (25 runs):" << std::endl;
+
+    // Esegui 25 run completi
+    for (int run = 1; run <= 25; ++run) {
+        double run_total_time = 0.0;
+
+        for (size_t i = 0; i < images.size(); ++i) {
+            ProcessingResult result = processImageBenchmark(images[i], run);
+            run_total_time += result.execution_time_ms;
+
+            // Salva solo la prima immagine di ogni run per evitare troppi file
+            if (i == 0) {
+                std::vector<float> grayscale = images[i].toGrayscaleFloat();
+                std::vector<float> processed = processor.applySharpenFilter(
+                    grayscale, images[i].getWidth(), images[i].getHeight());
+
+                std::string outputPath = "cpu_output_" + std::to_string(run) + ".png";
+                Image::saveGrayscaleFloat(processed, images[i].getWidth(),
+                                        images[i].getHeight(), outputPath);
+            }
+        }
+
+        ProcessingResult run_result;
+        run_result.execution_time_ms = run_total_time;
+        run_result.total_pixels = total_pixels_per_run;
+        run_result.throughput_mps = (total_pixels_per_run / 1e6) / (run_total_time / 1000.0);
+
+        all_results.push_back(run_result);
+
+        std::cout << "Run " << run << " complete - Total time: "
+                  << std::fixed << std::setprecision(2) << run_total_time << " ms" << std::endl;
     }
+
+    printDetailedResults(all_results, "CPU Sequential Batch Processing");
 }
 
-int ImageProcessingManager::getNumRuns() const {
-    return default_num_runs;
+void ImageProcessingManager::processSingleImage(const std::string& imagePath) {
+    // Carica e processa semplicemente una singola immagine (senza benchmark interno)
+    Image image(imagePath);
+    std::vector<float> grayscale = image.toGrayscaleFloat();
+    std::vector<float> processed = processor.applySharpenFilter(
+        grayscale, image.getWidth(), image.getHeight());
+    // Non salviamo l'immagine processata (solo per benchmark)
 }
 
-// Genera nome file di output
-std::string ImageProcessingManager::generateOutputFilename(size_t image_index) const {
-    return "output_" + std::to_string(image_index) + ".png";
+void ImageProcessingManager::printDetailedResults(
+    const std::vector<ProcessingResult>& results, const std::string& test_name) {
+
+    if (results.empty()) return;
+
+    // Calcola statistiche
+    std::vector<double> times;
+    std::vector<double> throughputs;
+
+    for (const auto& result : results) {
+        times.push_back(result.execution_time_ms);
+        throughputs.push_back(result.throughput_mps);
+    }
+
+    double avg_time = std::accumulate(times.begin(), times.end(), 0.0) / times.size();
+    double avg_throughput = std::accumulate(throughputs.begin(), throughputs.end(), 0.0) / throughputs.size();
+
+    // Calcola varianza e deviazione standard
+    double variance = 0.0;
+    for (double time : times) {
+        variance += std::pow(time - avg_time, 2);
+    }
+    variance /= times.size();
+    double std_dev = std::sqrt(variance);
+
+    // Stampa risultati
+    std::cout << "\n" << std::string(60, '=') << std::endl;
+    std::cout << test_name << " - RESULTS" << std::endl;
+    std::cout << std::string(60, '=') << std::endl;
+
+    std::cout << std::fixed << std::setprecision(2);
+    std::cout << "Total pixels processed: " << results[0].total_pixels << std::endl;
+    std::cout << "Number of runs: " << results.size() << std::endl;
+    std::cout << "\nTiming Results:" << std::endl;
+    std::cout << "  Average time: " << avg_time << " ms" << std::endl;
+    std::cout << "  Time variance: " << variance << " ms²" << std::endl;
+    std::cout << "  Time std dev: " << std_dev << " ms" << std::endl;
+    std::cout << "\nThroughput:" << std::endl;
+    std::cout << "  Average throughput: " << std::setprecision(1) << avg_throughput << " MP/s" << std::endl;
+
+    std::cout << std::string(60, '=') << std::endl;
 }
 
-// Stampa header del programma
-void ImageProcessingManager::printHeader() const {
-    std::cout << "=== Kernel Image Processing Sequenziale ===" << std::endl;
-    std::cout << "Kernel Sharpen 3x3 applicato" << std::endl << std::endl;
-}
-
-// Stampa header per singola immagine
-void ImageProcessingManager::printImageHeader(size_t image_index, const std::string& filename) const {
-    std::cout << "=== Elaborazione immagine " << image_index << ": " << filename << " ===" << std::endl;
-}
-
-// Stampa messaggio di completamento
-void ImageProcessingManager::printCompletion() const {
-    std::cout << "Elaborazione completata!" << std::endl;
+BenchmarkStats ImageProcessingManager::processImagesAndGetStats(const std::vector<std::string>& imageFiles) {
+    const int num_runs = 25;
+    std::vector<double> times;
+    std::vector<double> throughputs;
+    size_t total_pixels = 0;
+    std::vector<Image> images;
+    for (const auto& path : imageFiles) {
+        images.emplace_back(path);
+        total_pixels += images.back().getWidth() * images.back().getHeight();
+    }
+    for (int run = 1; run <= num_runs; ++run) {
+        double run_total_time = 0.0;
+        for (size_t i = 0; i < images.size(); ++i) {
+            auto start = monitor.getCurrentTime();
+            std::vector<float> grayscale = images[i].toGrayscaleFloat();
+            std::vector<float> processed = processor.applySharpenFilter(grayscale, images[i].getWidth(), images[i].getHeight());
+            auto end = monitor.getCurrentTime();
+            double time_ms = monitor.calculateDuration(start, end);
+            run_total_time += time_ms;
+        }
+        double throughput = (total_pixels / 1e6) / (run_total_time / 1000.0);
+        times.push_back(run_total_time);
+        throughputs.push_back(throughput);
+    }
+    double avg_time = std::accumulate(times.begin(), times.end(), 0.0) / times.size();
+    double avg_throughput = std::accumulate(throughputs.begin(), throughputs.end(), 0.0) / throughputs.size();
+    double variance = 0.0;
+    for (double t : times) variance += (t - avg_time) * (t - avg_time);
+    variance /= times.size();
+    double stddev = std::sqrt(variance);
+    BenchmarkStats stats{avg_time, stddev, avg_throughput};
+    return stats;
 }
