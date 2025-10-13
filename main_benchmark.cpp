@@ -9,7 +9,6 @@
 #include <filesystem>
 #include <algorithm>
 #include "Image.h"
-#include <map>
 #include "stb_image_write.h"
 
 namespace fs = std::filesystem;
@@ -115,7 +114,7 @@ int main() {
         image_files.resize(MAX_IMAGES);
     }
 
-    std::cout << "\n========== BENCHMARK CPU vs CUDA ULTRA-OTTIMIZZATO ==========" << std::endl;
+    std::cout << "\n========== BENCHMARK CPU vs CUDA ==========" << std::endl;
     std::cout << "Caricamento di " << image_files.size() << " immagini..." << std::endl;
 
     // PRE-CARICA tutte le immagini in memoria per eliminare overhead I/O
@@ -185,7 +184,7 @@ int main() {
     BenchmarkStats cpuStats = calculateStats(cpu_times, total_pixels);
 
     // --- BENCHMARK CUDA (ULTRA-OTTIMIZZATO CON STREAM ASINCRONI) ---
-    std::cout << "\n=== CUDA (Ultra-Ottimizzato con Stream Asincroni) - " << NUM_ITERATIONS << " iterazioni ===" << std::endl;
+    std::cout << "\n=== CUDA - " << NUM_ITERATIONS << " iterazioni ===" << std::endl;
     std::vector<double> cuda_times;
 
     CudaImageProcessingManager cudaManager;

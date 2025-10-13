@@ -27,7 +27,7 @@ do { \
 } while(0)
 
 // =====================================================
-// KERNEL ULTRA-OTTIMIZZATO con SHARED MEMORY (TILING)
+// KERNEL con SHARED MEMORY (TILING)
 // =====================================================
 // TILE_SIZE include il padding (1 pixel per lato per la convoluzione 3x3)
 #define TILE_WIDTH 16
@@ -98,7 +98,7 @@ __global__ void convolutionKernelOptimized(const float* input, float* output,
 }
 
 // =====================================================
-// KERNEL MEGA-BATCH OTTIMIZZATO con SHARED MEMORY
+// KERNEL  con SHARED MEMORY
 // =====================================================
 __global__ void convolutionMegaBatchKernelOptimized(const float* input, float* output,
                                                     const size_t* widths, const size_t* heights,
