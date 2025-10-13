@@ -3,85 +3,116 @@
 #include <stdexcept>
 #include <algorithm>
 
-// Definizione della costante statica
+// =====================================================
+// OTTIMIZZAZIONE 1: MEMORIA COSTANTE per il kernel
+// =====================================================
+// La memoria costante è cached e broadcast a tutti i thread in un warp
+// Ideale per il kernel di convoluzione che viene letto da tutti i thread
+__constant__ float d_sharpen_kernel_const[9];
+
+// Definizione della costante statica host
 constexpr float CudaConvolutionProcessor::sharpen_kernel[9];
 
-// Kernel CUDA per la convoluzione
-__global__ void convolutionKernel(const float* input, float* output,
-                                const float* kernel,
-                                int width, int height) {
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
+// =====================================================
+// MACRO per GESTIONE ERRORI ROBUSTA (OTTIMIZAZIONE 2)
+// =====================================================
+#define CUDA_CHECK(call) \
+do { \
+    cudaError_t err = call; \
+    if (err != cudaSuccess) { \
+        std::cerr << "CUDA Error in " << __FILE__ << ":" << __LINE__ \
+                  << " - " << cudaGetErrorString(err) << std::endl; \
+        throw std::runtime_error(std::string("CUDA Error: ") + cudaGetErrorString(err)); \
+    } \
+} while(0)
 
+// =====================================================
+// KERNEL ULTRA-OTTIMIZZATO con SHARED MEMORY (TILING)
+// =====================================================
+// TILE_SIZE include il padding (1 pixel per lato per la convoluzione 3x3)
+#define TILE_WIDTH 16
+#define TILE_SIZE (TILE_WIDTH + 2)  // 18x18 per includere i bordi
+
+__global__ void convolutionKernelOptimized(const float* input, float* output,
+                                          int width, int height) {
+    // Shared memory per il tile con padding
+    __shared__ float tile[TILE_SIZE][TILE_SIZE];
+
+    // Coordinate globali del thread
+    int x = blockIdx.x * TILE_WIDTH + threadIdx.x;
+    int y = blockIdx.y * TILE_WIDTH + threadIdx.y;
+
+    // Coordinate locali nel tile
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+
+    // Carica il tile in shared memory con padding (cooperative loading)
+    // Ogni thread carica il suo pixel + può caricare pixel di padding
+    for (int dy = 0; dy <= 1; dy++) {
+        for (int dx = 0; dx <= 1; dx++) {
+            int tile_x = tx * 2 + dx;
+            int tile_y = ty * 2 + dy;
+
+            if (tile_x < TILE_SIZE && tile_y < TILE_SIZE) {
+                int global_x = blockIdx.x * TILE_WIDTH + tile_x - 1;
+                int global_y = blockIdx.y * TILE_WIDTH + tile_y - 1;
+
+                // Gestione bordi con clamping
+                global_x = max(0, min(global_x, width - 1));
+                global_y = max(0, min(global_y, height - 1));
+
+                tile[tile_y][tile_x] = input[global_y * width + global_x];
+            }
+        }
+    }
+
+    // Sincronizza per assicurare che tutto il tile sia caricato
+    __syncthreads();
+
+    // Se il thread è fuori dai bounds, ritorna
     if (x >= width || y >= height) return;
 
     int idx = y * width + x;
 
-    // Copia i pixel dei bordi senza applicare la convoluzione
+    // Gestione bordi: copia senza convoluzione
     if (x == 0 || x == width - 1 || y == 0 || y == height - 1) {
         output[idx] = input[idx];
         return;
     }
 
-    // Applica la convoluzione 3x3
+    // Applica la convoluzione usando SHARED MEMORY (molto più veloce!)
     float sum = 0.0f;
-    for (int ky = -1; ky <= 1; ky++) {
-        for (int kx = -1; kx <= 1; kx++) {
-            int pixel_y = y + ky;
-            int pixel_x = x + kx;
-            int pixel_idx = pixel_y * width + pixel_x;
-            int kernel_idx = (ky + 1) * 3 + (kx + 1);
-
-            sum += input[pixel_idx] * kernel[kernel_idx];
+    #pragma unroll
+    for (int ky = 0; ky < 3; ky++) {
+        #pragma unroll
+        for (int kx = 0; kx < 3; kx++) {
+            // Leggi dalla shared memory invece della global memory
+            float pixel_val = tile[ty + ky][tx + kx];
+            float kernel_val = d_sharpen_kernel_const[ky * 3 + kx];
+            sum += pixel_val * kernel_val;
         }
     }
 
-    // Clamp il risultato tra 0 e 255
+    // Clamp il risultato
     output[idx] = fmaxf(0.0f, fminf(255.0f, sum));
 }
 
-// Kernel CUDA batch per la convoluzione su più immagini
-__global__ void convolutionKernelBatch(const float* input, float* output,
-                                       const float* kernel,
-                                       int width, int height, int batch_size) {
-    int img_idx = blockIdx.z; // Ogni blocco z lavora su una immagine diversa
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-    if (x >= width || y >= height || img_idx >= batch_size) return;
-    int img_offset = img_idx * width * height;
-    int idx = img_offset + y * width + x;
-    // Copia i pixel dei bordi senza applicare la convoluzione
-    if (x == 0 || x == width - 1 || y == 0 || y == height - 1) {
-        output[idx] = input[idx];
-        return;
-    }
-    float sum = 0.0f;
-    for (int ky = -1; ky <= 1; ky++) {
-        for (int kx = -1; kx <= 1; kx++) {
-            int pixel_y = y + ky;
-            int pixel_x = x + kx;
-            // Controllo bounds
-            if (pixel_y < 0 || pixel_y >= height || pixel_x < 0 || pixel_x >= width) continue;
-            int pixel_idx = img_offset + pixel_y * width + pixel_x;
-            int kernel_idx = (ky + 1) * 3 + (kx + 1);
-            sum += input[pixel_idx] * kernel[kernel_idx];
-        }
-    }
-    output[idx] = fmaxf(0.0f, fminf(255.0f, sum));
-}
-
-// Kernel CUDA ottimizzato per mega-batch con immagini di dimensioni diverse
-__global__ void convolutionMegaBatchKernel(const float* input, float* output,
-                                           const float* kernel,
-                                           const size_t* widths, const size_t* heights,
-                                           const size_t* offsets, int num_images) {
+// =====================================================
+// KERNEL MEGA-BATCH OTTIMIZZATO con SHARED MEMORY
+// =====================================================
+__global__ void convolutionMegaBatchKernelOptimized(const float* input, float* output,
+                                                    const size_t* widths, const size_t* heights,
+                                                    const size_t* offsets, int num_images) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     int total_threads = gridDim.x * blockDim.x;
 
-    // Ogni thread processa più pixel per massimizzare l'utilizzo GPU
-    for (int pixel_id = tid; pixel_id < offsets[num_images - 1] + widths[num_images - 1] * heights[num_images - 1]; pixel_id += total_threads) {
+    // Calcola il numero totale di pixel
+    size_t total_pixels = offsets[num_images - 1] + widths[num_images - 1] * heights[num_images - 1];
 
-        // Trova quale immagine contiene questo pixel
+    // Ogni thread processa più pixel con stride per massimizzare l'utilizzo
+    for (size_t pixel_id = tid; pixel_id < total_pixels; pixel_id += total_threads) {
+
+        // Trova l'immagine a cui appartiene questo pixel (binary search sarebbe meglio, ma per 20 immagini va bene linear)
         int img_idx = 0;
         for (int i = 0; i < num_images - 1; ++i) {
             if (pixel_id >= offsets[i + 1]) {
@@ -99,28 +130,24 @@ __global__ void convolutionMegaBatchKernel(const float* input, float* output,
         int x = local_pixel % width;
         int y = local_pixel / width;
 
-        // Controllo bounds
-        if (x >= width || y >= height) continue;
-
-        // Copia i pixel dei bordi senza applicare la convoluzione
+        // Gestione bordi
         if (x == 0 || x == width - 1 || y == 0 || y == height - 1) {
             output[pixel_id] = input[pixel_id];
             continue;
         }
 
-        // Applica la convoluzione 3x3
+        // Applica la convoluzione usando MEMORIA COSTANTE
         float sum = 0.0f;
+        #pragma unroll
         for (int ky = -1; ky <= 1; ky++) {
+            #pragma unroll
             for (int kx = -1; kx <= 1; kx++) {
                 int pixel_y = y + ky;
                 int pixel_x = x + kx;
 
-                // Controllo bounds
-                if (pixel_y < 0 || pixel_y >= height || pixel_x < 0 || pixel_x >= width) continue;
-
                 int pixel_idx = offset + pixel_y * width + pixel_x;
                 int kernel_idx = (ky + 1) * 3 + (kx + 1);
-                sum += input[pixel_idx] * kernel[kernel_idx];
+                sum += input[pixel_idx] * d_sharpen_kernel_const[kernel_idx];
             }
         }
 
@@ -128,9 +155,51 @@ __global__ void convolutionMegaBatchKernel(const float* input, float* output,
     }
 }
 
+// =====================================================
+// KERNEL BATCH OTTIMIZZATO (per immagini stessa dimensione)
+// =====================================================
+__global__ void convolutionKernelBatch(const float* input, float* output,
+                                       int width, int height, int batch_size) {
+    int img_idx = blockIdx.z; // Ogni blocco z lavora su una immagine diversa
+    int x = blockIdx.x * TILE_WIDTH + threadIdx.x;
+    int y = blockIdx.y * TILE_WIDTH + threadIdx.y;
+
+    if (x >= width || y >= height || img_idx >= batch_size) return;
+
+    int img_offset = img_idx * width * height;
+    int idx = img_offset + y * width + x;
+
+    // Copia i pixel dei bordi senza applicare la convoluzione
+    if (x == 0 || x == width - 1 || y == 0 || y == height - 1) {
+        output[idx] = input[idx];
+        return;
+    }
+
+    float sum = 0.0f;
+    #pragma unroll
+    for (int ky = -1; ky <= 1; ky++) {
+        #pragma unroll
+        for (int kx = -1; kx <= 1; kx++) {
+            int pixel_y = y + ky;
+            int pixel_x = x + kx;
+
+            if (pixel_y < 0 || pixel_y >= height || pixel_x < 0 || pixel_x >= width) continue;
+
+            int pixel_idx = img_offset + pixel_y * width + pixel_x;
+            int kernel_idx = (ky + 1) * 3 + (kx + 1);
+            sum += input[pixel_idx] * d_sharpen_kernel_const[kernel_idx];
+        }
+    }
+    output[idx] = fmaxf(0.0f, fminf(255.0f, sum));
+}
+
 CudaConvolutionProcessor::CudaConvolutionProcessor()
     : d_input(nullptr), d_output(nullptr), d_kernel(nullptr),
       max_width(0), max_height(0), initialized(false) {
+
+    // Copia il kernel sharpen nella memoria costante (una sola volta!)
+    CUDA_CHECK(cudaMemcpyToSymbol(d_sharpen_kernel_const, sharpen_kernel,
+                                  9 * sizeof(float)));
 }
 
 CudaConvolutionProcessor::~CudaConvolutionProcessor() {
@@ -139,43 +208,15 @@ CudaConvolutionProcessor::~CudaConvolutionProcessor() {
 
 void CudaConvolutionProcessor::initializeGPUMemory(size_t width, size_t height) {
     if (initialized && width <= max_width && height <= max_height) {
-        return; // Memoria già allocata e sufficiente
+        return;
     }
 
     cleanupGPUMemory();
 
     size_t image_size = width * height * sizeof(float);
-    size_t kernel_size = 9 * sizeof(float);
 
-    // Alloca memoria GPU
-    cudaError_t err = cudaMalloc(&d_input, image_size);
-    if (err != cudaSuccess) {
-        throw std::runtime_error("Failed to allocate GPU memory for input: " +
-                               std::string(cudaGetErrorString(err)));
-    }
-
-    err = cudaMalloc(&d_output, image_size);
-    if (err != cudaSuccess) {
-        cudaFree(d_input);
-        throw std::runtime_error("Failed to allocate GPU memory for output: " +
-                               std::string(cudaGetErrorString(err)));
-    }
-
-    err = cudaMalloc(&d_kernel, kernel_size);
-    if (err != cudaSuccess) {
-        cudaFree(d_input);
-        cudaFree(d_output);
-        throw std::runtime_error("Failed to allocate GPU memory for kernel: " +
-                               std::string(cudaGetErrorString(err)));
-    }
-
-    // Copia il kernel sulla GPU
-    err = cudaMemcpy(d_kernel, sharpen_kernel, kernel_size, cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) {
-        cleanupGPUMemory();
-        throw std::runtime_error("Failed to copy kernel to GPU: " +
-                               std::string(cudaGetErrorString(err)));
-    }
+    CUDA_CHECK(cudaMalloc(&d_input, image_size));
+    CUDA_CHECK(cudaMalloc(&d_output, image_size));
 
     max_width = width;
     max_height = height;
@@ -205,44 +246,23 @@ std::vector<float> CudaConvolutionProcessor::applySharpenFilter(
 
     size_t image_size = width * height * sizeof(float);
 
-    // Copia i dati di input sulla GPU
-    cudaError_t err = cudaMemcpy(d_input, image.data(), image_size, cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) {
-        throw std::runtime_error("Failed to copy input to GPU: " +
-                               std::string(cudaGetErrorString(err)));
-    }
+    CUDA_CHECK(cudaMemcpy(d_input, image.data(), image_size, cudaMemcpyHostToDevice));
 
-    // Configura i thread blocks
-    dim3 blockSize(16, 16);
-    dim3 gridSize((width + blockSize.x - 1) / blockSize.x,
-                  (height + blockSize.y - 1) / blockSize.y);
+    // Usa TILE_WIDTH per la configurazione dei blocchi
+    dim3 blockSize(TILE_WIDTH, TILE_WIDTH);
+    dim3 gridSize((width + TILE_WIDTH - 1) / TILE_WIDTH,
+                  (height + TILE_WIDTH - 1) / TILE_WIDTH);
 
-    // Esegui il kernel
-    convolutionKernel<<<gridSize, blockSize>>>(d_input, d_output, d_kernel,
-                                              static_cast<int>(width),
-                                              static_cast<int>(height));
+    // Usa il kernel OTTIMIZZATO con shared memory
+    convolutionKernelOptimized<<<gridSize, blockSize>>>(d_input, d_output,
+                                                        static_cast<int>(width),
+                                                        static_cast<int>(height));
 
-    // Controlla errori del kernel
-    err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        throw std::runtime_error("Kernel execution failed: " +
-                               std::string(cudaGetErrorString(err)));
-    }
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
 
-    // Sincronizza
-    err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-        throw std::runtime_error("CUDA synchronization failed: " +
-                               std::string(cudaGetErrorString(err)));
-    }
-
-    // Copia il risultato dalla GPU
     std::vector<float> result(width * height);
-    err = cudaMemcpy(result.data(), d_output, image_size, cudaMemcpyDeviceToHost);
-    if (err != cudaSuccess) {
-        throw std::runtime_error("Failed to copy result from GPU: " +
-                               std::string(cudaGetErrorString(err)));
-    }
+    CUDA_CHECK(cudaMemcpy(result.data(), d_output, image_size, cudaMemcpyDeviceToHost));
 
     return result;
 }
@@ -255,60 +275,32 @@ std::vector<float> CudaConvolutionProcessor::applySharpenFilterTimed(
 
     size_t image_size = width * height * sizeof(float);
 
-    // Crea eventi CUDA per misurare il tempo
     cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
 
-    // Copia i dati di input sulla GPU
-    cudaError_t err = cudaMemcpy(d_input, image.data(), image_size, cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) {
-        cudaEventDestroy(start);
-        cudaEventDestroy(stop);
-        throw std::runtime_error("Failed to copy input to GPU: " +
-                               std::string(cudaGetErrorString(err)));
-    }
+    CUDA_CHECK(cudaMemcpy(d_input, image.data(), image_size, cudaMemcpyHostToDevice));
 
-    // Configura i thread blocks
-    dim3 blockSize(16, 16);
-    dim3 gridSize((width + blockSize.x - 1) / blockSize.x,
-                  (height + blockSize.y - 1) / blockSize.y);
+    dim3 blockSize(TILE_WIDTH, TILE_WIDTH);
+    dim3 gridSize((width + TILE_WIDTH - 1) / TILE_WIDTH,
+                  (height + TILE_WIDTH - 1) / TILE_WIDTH);
 
-    // Inizia la misurazione del tempo
-    cudaEventRecord(start);
+    CUDA_CHECK(cudaEventRecord(start));
 
-    // Esegui il kernel
-    convolutionKernel<<<gridSize, blockSize>>>(d_input, d_output, d_kernel,
-                                              static_cast<int>(width),
-                                              static_cast<int>(height));
+    convolutionKernelOptimized<<<gridSize, blockSize>>>(d_input, d_output,
+                                                        static_cast<int>(width),
+                                                        static_cast<int>(height));
 
-    // Fine misurazione del tempo
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
+    CUDA_CHECK(cudaEventRecord(stop));
+    CUDA_CHECK(cudaEventSynchronize(stop));
 
-    // Calcola il tempo trascorso
     cudaEventElapsedTime(&gpu_time_ms, start, stop);
 
-    // Controlla errori del kernel
-    err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        cudaEventDestroy(start);
-        cudaEventDestroy(stop);
-        throw std::runtime_error("Kernel execution failed: " +
-                               std::string(cudaGetErrorString(err)));
-    }
+    CUDA_CHECK(cudaGetLastError());
 
-    // Copia il risultato dalla GPU
     std::vector<float> result(width * height);
-    err = cudaMemcpy(result.data(), d_output, image_size, cudaMemcpyDeviceToHost);
-    if (err != cudaSuccess) {
-        cudaEventDestroy(start);
-        cudaEventDestroy(stop);
-        throw std::runtime_error("Failed to copy result from GPU: " +
-                               std::string(cudaGetErrorString(err)));
-    }
+    CUDA_CHECK(cudaMemcpy(result.data(), d_output, image_size, cudaMemcpyDeviceToHost));
 
-    // Pulizia eventi
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
 
@@ -380,8 +372,8 @@ std::vector<std::vector<float>> CudaConvolutionProcessor::applySharpenFilterBatc
 
     cudaEventRecord(start);
 
-    // Lancia kernel batch
-    convolutionKernelBatch<<<gridSize, blockSize>>>(d_input_batch, d_output_batch, d_kernel,
+    // Lancia kernel batch OTTIMIZZATO (non serve più passare d_kernel, usa la memoria costante)
+    convolutionKernelBatch<<<gridSize, blockSize>>>(d_input_batch, d_output_batch,
                                                    static_cast<int>(width), static_cast<int>(height), static_cast<int>(batch_size));
 
     err = cudaGetLastError();
@@ -515,9 +507,9 @@ std::vector<float> CudaConvolutionProcessor::applySharpenFilterMegaBatch(
 
     cudaEventRecord(start);
 
-    // Lancia il mega-kernel ottimizzato
-    convolutionMegaBatchKernel<<<blocks, threads_per_block>>>(
-        d_mega_input, d_mega_output, d_kernel,
+    // Lancia il mega-kernel ottimizzato (usa memoria costante, non serve d_kernel)
+    convolutionMegaBatchKernelOptimized<<<blocks, threads_per_block>>>(
+        d_mega_input, d_mega_output,
         d_widths, d_heights, d_offsets, num_images);
 
     cudaEventRecord(stop);
@@ -553,11 +545,10 @@ void CudaConvolutionProcessor::applySharpenFilterMegaBatchPreallocated(
     size_t* d_widths, size_t* d_heights, size_t* d_offsets,
     int num_images, int blocks, int threads_per_block) {
 
-    // Questa funzione fa SOLO il kernel launch - zero overhead!
-    convolutionMegaBatchKernel<<<blocks, threads_per_block>>>(
-        d_input, d_output, d_kernel,
+    // Usa il kernel OTTIMIZZATO con memoria costante
+    convolutionMegaBatchKernelOptimized<<<blocks, threads_per_block>>>(
+        d_input, d_output,
         d_widths, d_heights, d_offsets, num_images);
 
-    cudaDeviceSynchronize(); // Aspetta che il kernel finisca
+    CUDA_CHECK(cudaDeviceSynchronize());
 }
-
