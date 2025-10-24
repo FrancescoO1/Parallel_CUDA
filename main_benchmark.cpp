@@ -99,7 +99,7 @@ void normalizeBuffer(std::vector<float>& buffer) {
 }
 
 int main() {
-    const std::string imageDir = "/media/francesco/DATA/dev/Clion/Parallel_CUDA_Orlandi_Francesco/archive/sharp";
+    const std::string imageDir = "/media/francesco/DATA/dev/Clion/Parallel_CUDA_Orlandi_Francesco/4k_IMG/Dataset4K";
     const int NUM_ITERATIONS = 10;
     const int MAX_IMAGES = 20;
 
