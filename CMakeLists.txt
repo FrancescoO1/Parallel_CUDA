@@ -22,11 +22,8 @@ message(STATUS "CUDA version: ${CUDAToolkit_VERSION}")
 # Definisci i file sorgente
 set(SOURCES
         Image.cpp
-        PerformanceMonitor.cpp
         CudaConvolutionProcessor.cu
-        CudaImageProcessingManager.cpp
         main_benchmark.cpp
-        ImageProcessingManager.cpp
         ConvolutionProcessor.cpp
 )
 

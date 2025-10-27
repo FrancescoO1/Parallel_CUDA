@@ -10,6 +10,7 @@
 #include <algorithm>
 #include "Image.h"
 #include "stb_image_write.h"
+#include <cuda_runtime.h>
 
 namespace fs = std::filesystem;
 
@@ -44,6 +45,9 @@ std::vector<std::string> getImageFiles(const std::string& directory, int max_ima
 
 // Funzione per calcolare statistiche da un vettore di tempi
 BenchmarkStats calculateStats(const std::vector<double>& times_ms, size_t total_pixels) {
+    if (times_ms.empty()) {
+        return {0.0, 0.0, 0.0};
+    }
     double sum = 0.0;
     for (double t : times_ms) sum += t;
     double avg = sum / times_ms.size();
@@ -65,17 +69,19 @@ void printComparison(const BenchmarkStats& cpu, const BenchmarkStats& cuda) {
     std::cout << "\n================== CONFRONTO FINALE ==================" << std::endl;
     std::cout << "| Modalità   | Tempo medio (ms) | Dev. Std (ms) | Throughput (MP/s) |" << std::endl;
     std::cout << "|------------|------------------|---------------|-------------------|" << std::endl;
-    std::cout << "| CPU        | " << cpu.avg_time_ms << "           | " << cpu.stddev_time_ms << "      | " << cpu.avg_throughput_mps << "         |" << std::endl;
-    std::cout << "| CUDA       | " << cuda.avg_time_ms << "           | " << cuda.stddev_time_ms << "      | " << cuda.avg_throughput_mps << "         |" << std::endl;
+    printf("| CPU        | %-16.2f | %-13.2f | %-17.2f |\n", cpu.avg_time_ms, cpu.stddev_time_ms, cpu.avg_throughput_mps);
+    printf("| CUDA       | %-16.2f | %-13.2f | %-17.2f |\n", cuda.avg_time_ms, cuda.stddev_time_ms, cuda.avg_throughput_mps);
     std::cout << "======================================================" << std::endl;
-    double speedup = cpu.avg_time_ms / cuda.avg_time_ms;
-    std::cout << "\nSpeedup (CPU/CUDA): " << speedup << "x" << std::endl;
+    if (cuda.avg_time_ms > 0) {
+        double speedup = cpu.avg_time_ms / cuda.avg_time_ms;
+        std::cout << "\nSpeedup (CPU/CUDA): " << speedup << "x" << std::endl;
+    }
 }
 
-// Funzione per salvare un'immagine grayscale float [0,1] come PNG QUESTA FUNZIONE DA ELIMINARE SE MODIFCA I BENCHMARK
+// Funzione per salvare un'immagine grayscale float [0,1] come PNG
 void saveGrayscaleImage(const std::vector<float>& buffer, int width, int height, const std::string& filename) {
     std::vector<unsigned char> img8u(width * height);
-    for (int i = 0; i < width * height; ++i) {
+    for (size_t i = 0; i < buffer.size(); ++i) {
         float v = buffer[i];
         if (v < 0.0f) v = 0.0f;
         if (v > 1.0f) v = 1.0f;
@@ -86,6 +92,7 @@ void saveGrayscaleImage(const std::vector<float>& buffer, int width, int height,
 
 // Funzione per normalizzare un buffer float in [0,1]
 void normalizeBuffer(std::vector<float>& buffer) {
+    if (buffer.empty()) return;
     float min_v = *std::min_element(buffer.begin(), buffer.end());
     float max_v = *std::max_element(buffer.begin(), buffer.end());
     if (max_v - min_v > 1e-6f) {
@@ -93,7 +100,6 @@ void normalizeBuffer(std::vector<float>& buffer) {
             v = (v - min_v) / (max_v - min_v);
         }
     } else {
-        // Se tutti i valori sono uguali, portali a 0
         std::fill(buffer.begin(), buffer.end(), 0.0f);
     }
 }
@@ -103,39 +109,27 @@ int main() {
     const int NUM_ITERATIONS = 10;
     const int MAX_IMAGES = 20;
 
-    // Carica direttamente 20 immagini senza filtro per dimensione
     std::vector<std::string> image_files = getImageFiles(imageDir, MAX_IMAGES);
     if (image_files.empty()) {
-        std::cerr << "Nessuna immagine trovata!" << std::endl;
+        std::cerr << "Nessuna immagine trovata nella directory specificata!" << std::endl;
         return 1;
-    }
-
-    if (image_files.size() > MAX_IMAGES) {
-        image_files.resize(MAX_IMAGES);
     }
 
     std::cout << "\n========== BENCHMARK CPU vs CUDA ==========" << std::endl;
     std::cout << "Caricamento di " << image_files.size() << " immagini..." << std::endl;
 
-    // PRE-CARICA tutte le immagini in memoria per eliminare overhead I/O
     std::vector<Image> preloaded_images;
     size_t total_pixels = 0;
-
     for (const auto& path : image_files) {
         preloaded_images.emplace_back(path);
         total_pixels += preloaded_images.back().getWidth() * preloaded_images.back().getHeight();
-        std::cout << "Caricata: " << path << " ("
-                  << preloaded_images.back().getWidth() << "x"
-                  << preloaded_images.back().getHeight() << ")" << std::endl;
     }
+    std::cout << "Caricamento completato. Pixel totali per run: " << total_pixels
+              << " (" << total_pixels / 1000000.0 << " MP)" << std::endl;
 
-    std::cout << "\nPixel totali: " << total_pixels << " (" << total_pixels/1000000.0 << " MP)" << std::endl;
-
-    // ===== OTTIMIZZAZIONE: PRE-CALCOLA LA CONVERSIONE GRAYSCALE UNA SOLA VOLTA =====
     std::cout << "\nPre-calcolo conversione grayscale..." << std::endl;
     std::vector<std::vector<float>> precomputed_grayscale;
     std::vector<size_t> precomputed_widths, precomputed_heights, precomputed_offsets;
-    std::vector<float> mega_buffer;
     size_t batch_total_pixels = 0;
 
     for (const auto& img : preloaded_images) {
@@ -146,105 +140,94 @@ int main() {
         batch_total_pixels += img.getWidth() * img.getHeight();
     }
 
-    mega_buffer.resize(batch_total_pixels);
-    size_t offset = 0;
-    for (size_t i = 0; i < preloaded_images.size(); ++i) {
-        std::copy(precomputed_grayscale[i].begin(), precomputed_grayscale[i].end(),
-                  mega_buffer.begin() + offset);
-        offset += precomputed_grayscale[i].size();
+    std::vector<float> mega_buffer(batch_total_pixels);
+    size_t current_offset = 0;
+    for (const auto& gray_img : precomputed_grayscale) {
+        std::copy(gray_img.begin(), gray_img.end(), mega_buffer.begin() + current_offset);
+        current_offset += gray_img.size();
     }
     std::cout << "Pre-calcolo completato!" << std::endl;
 
     // --- BENCHMARK CPU (SEQUENZIALE) ---
     std::cout << "\n=== CPU (Sequenziale) - " << NUM_ITERATIONS << " iterazioni ===" << std::endl;
     std::vector<double> cpu_times;
-
     ImageProcessingManager cpuManager;
-
     for (int iter = 0; iter < NUM_ITERATIONS; ++iter) {
         std::cout << "CPU Iterazione " << (iter + 1) << "/" << NUM_ITERATIONS << "..." << std::flush;
-
         auto start = std::chrono::high_resolution_clock::now();
-
-        // Processa tutte le immagini PRE-CARICATE sequenzialmente
         for (size_t i = 0; i < precomputed_grayscale.size(); ++i) {
-            // Copia per non modificare l'originale
-            std::vector<float> grayscale_copy = precomputed_grayscale[i];
+            std::vector<float> grayscale_copy = precomputed_grayscale[i]; // Copia per non modificare l'originale
             cpuManager.getProcessor().applySharpenFilter(grayscale_copy,
-                precomputed_widths[i], precomputed_heights[i]);
+                                                         precomputed_widths[i], precomputed_heights[i]);
         }
-
         auto end = std::chrono::high_resolution_clock::now();
         double time_ms = std::chrono::duration<double, std::milli>(end - start).count();
         cpu_times.push_back(time_ms);
-
         std::cout << " " << time_ms << " ms" << std::endl;
     }
-
     BenchmarkStats cpuStats = calculateStats(cpu_times, total_pixels);
 
-    // --- BENCHMARK CUDA (ULTRA-OTTIMIZZATO CON STREAM ASINCRONI) ---
+    // --- BENCHMARK CUDA ---
     std::cout << "\n=== CUDA - " << NUM_ITERATIONS << " iterazioni ===" << std::endl;
     std::vector<double> cuda_times;
-
     CudaImageProcessingManager cudaManager;
 
-    std::cout << "Pre-inizializzazione memoria GPU..." << std::endl;
-    cudaManager.getProcessor().initializeGPUMemory(2048, 2048);
+    // ===== 1. PRE-ALLOCAZIONE MEMORIA PINNED (HOST) E DEVICE (GPU) =====
+    std::cout << "Pre-allocazione memoria Host (pinned) e Device (GPU)..." << std::endl;
 
-    // ===== OTTIMIZZAZIONE: USA PINNED MEMORY per trasferimenti più veloci =====
     float* h_mega_input_pinned = nullptr;
     float* h_mega_output_pinned = nullptr;
+    // *** FIX 1: Allocare la memoria pinned sull'host ***
     cudaMallocHost(&h_mega_input_pinned, batch_total_pixels * sizeof(float));
     cudaMallocHost(&h_mega_output_pinned, batch_total_pixels * sizeof(float));
 
-    // Copia i dati nel pinned memory
+    // Copia i dati dal buffer standard a quello pinned
     std::copy(mega_buffer.begin(), mega_buffer.end(), h_mega_input_pinned);
 
-    // Pre-alloca TUTTA la memoria GPU una volta sola
     float* d_mega_input = nullptr;
     float* d_mega_output = nullptr;
     size_t* d_widths = nullptr;
     size_t* d_heights = nullptr;
     size_t* d_offsets = nullptr;
-
+    // *** FIX 2: Allocare tutta la memoria necessaria sulla GPU ***
     cudaMalloc(&d_mega_input, batch_total_pixels * sizeof(float));
     cudaMalloc(&d_mega_output, batch_total_pixels * sizeof(float));
     cudaMalloc(&d_widths, preloaded_images.size() * sizeof(size_t));
     cudaMalloc(&d_heights, preloaded_images.size() * sizeof(size_t));
     cudaMalloc(&d_offsets, preloaded_images.size() * sizeof(size_t));
 
-    // Copia i metadati una volta sola (non cambiano mai)
+    // ===== 2. CREAZIONE STREAM E TRASFERIMENTO METADATI (UNA SOLA VOLTA) =====
+    cudaStream_t stream;
+    cudaStreamCreate(&stream);
+
+    // I metadati non cambiano, quindi li trasferiamo una sola volta fuori dal ciclo
     cudaMemcpy(d_widths, precomputed_widths.data(), preloaded_images.size() * sizeof(size_t), cudaMemcpyHostToDevice);
     cudaMemcpy(d_heights, precomputed_heights.data(), preloaded_images.size() * sizeof(size_t), cudaMemcpyHostToDevice);
     cudaMemcpy(d_offsets, precomputed_offsets.data(), preloaded_images.size() * sizeof(size_t), cudaMemcpyHostToDevice);
 
-    std::cout << "Memoria GPU pre-allocata: " << batch_total_pixels << " pixels, " << preloaded_images.size() << " immagini" << std::endl;
+    std::cout << "Memoria pre-allocata e metadati trasferiti." << std::endl;
 
-    // ===== OTTIMIZZAZIONE: CREA STREAM ASINCRONO =====
-    cudaStream_t stream;
-    cudaStreamCreate(&stream);
-
+    // ===== 3. CICLO DI BENCHMARK =====
     for (int iter = 0; iter < NUM_ITERATIONS; ++iter) {
         std::cout << "CUDA Iterazione " << (iter + 1) << "/" << NUM_ITERATIONS << "..." << std::flush;
 
         auto start = std::chrono::high_resolution_clock::now();
 
-        // ===== USA COPIE ASINCRONE con STREAM =====
+        // *** FIX 3: Usare trasferimenti ASINCRONI sullo stream ***
         cudaMemcpyAsync(d_mega_input, h_mega_input_pinned, batch_total_pixels * sizeof(float),
-                       cudaMemcpyHostToDevice, stream);
+                        cudaMemcpyHostToDevice, stream);
 
-        // Configurazione kernel ottimizzata per GTX 1660 Ti
-        int threads_per_block = 256;  // Aumentato per migliore occupancy
+        // Configurazione del kernel
+        int threads_per_block = 256;
         int max_blocks = 1536;
         int blocks = std::min(max_blocks, (int)((batch_total_pixels + threads_per_block - 1) / threads_per_block));
 
-        // USA LA VERSIONE OTTIMIZZATA che riusa la memoria pre-allocata
+        // Lancia il kernel sullo stesso stream
         cudaManager.getProcessor().applySharpenFilterMegaBatchPreallocated(
             d_mega_input, d_mega_output, d_widths, d_heights, d_offsets,
             preloaded_images.size(), blocks, threads_per_block);
 
-        // Sincronizza solo alla fine
+        // *** FIX 4: Sincronizzare lo stream per attendere il completamento di TUTTE le operazioni ***
         cudaStreamSynchronize(stream);
 
         auto end = std::chrono::high_resolution_clock::now();
@@ -254,56 +237,29 @@ int main() {
         std::cout << " " << time_ms << " ms" << std::endl;
     }
 
-    // PULISCE memoria GPU alla fine
-    cudaStreamDestroy(stream);
-    cudaFree(d_mega_input);
-    cudaFree(d_mega_output);
-    cudaFree(d_widths);
-    cudaFree(d_heights);
-    cudaFree(d_offsets);
+    // ===== 4. COPIA DEI RISULTATI E PULIZIA =====
+    // Copia il risultato finale dalla GPU all'host per il salvataggio
+    cudaMemcpy(h_mega_output_pinned, d_mega_output, batch_total_pixels * sizeof(float), cudaMemcpyDeviceToHost);
 
     BenchmarkStats cudaStats = calculateStats(cuda_times, total_pixels);
 
     // --- SALVATAGGIO IMMAGINI ELABORATE GPU (FUORI DAL BENCHMARK) ---
-    std::cout << "\n[POST-BENCHMARK] Salvataggio immagini filtrate GPU..." << std::endl;
-
-    // Riallochiamo temporaneamente per salvare
-    cudaMalloc(&d_mega_input, batch_total_pixels * sizeof(float));
-    cudaMalloc(&d_mega_output, batch_total_pixels * sizeof(float));
-    cudaMalloc(&d_widths, preloaded_images.size() * sizeof(size_t));
-    cudaMalloc(&d_heights, preloaded_images.size() * sizeof(size_t));
-    cudaMalloc(&d_offsets, preloaded_images.size() * sizeof(size_t));
-
-    cudaMemcpy(d_mega_input, h_mega_input_pinned, batch_total_pixels * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_widths, precomputed_widths.data(), preloaded_images.size() * sizeof(size_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_heights, precomputed_heights.data(), preloaded_images.size() * sizeof(size_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_offsets, precomputed_offsets.data(), preloaded_images.size() * sizeof(size_t), cudaMemcpyHostToDevice);
-
-    int threads_per_block = 256;
-    int max_blocks = 1536;
-    int blocks = std::min(max_blocks, (int)((batch_total_pixels + threads_per_block - 1) / threads_per_block));
-
-    cudaManager.getProcessor().applySharpenFilterMegaBatchPreallocated(
-        d_mega_input, d_mega_output, d_widths, d_heights, d_offsets,
-        preloaded_images.size(), blocks, threads_per_block);
-
-    // Copia i risultati
-    cudaMemcpy(h_mega_output_pinned, d_mega_output, batch_total_pixels * sizeof(float), cudaMemcpyDeviceToHost);
-
-    // Salva le immagini
+    std::cout << "\n Salvataggio immagini filtrate GPU..." << std::endl;
+    // Non è necessario rieseguire il kernel, i risultati sono già in h_mega_output_pinned
     for (size_t i = 0; i < preloaded_images.size(); ++i) {
         std::vector<float> filtered(precomputed_grayscale[i].size());
+        // *** FIX 5: Copiare dal buffer di output pinnato (h_mega_output_pinned) ***
         std::copy(h_mega_output_pinned + precomputed_offsets[i],
                   h_mega_output_pinned + precomputed_offsets[i] + filtered.size(),
                   filtered.begin());
         normalizeBuffer(filtered);
-        std::string out_path = "/media/francesco/DATA/dev/Clion/Parallel_CUDA_Orlandi_Francesco/immagini_output_gpu/output_gpu_"
-                              + std::to_string(i) + ".png";
+        std::string out_path = "output_gpu_" + std::to_string(i) + ".png"; // Salva nella directory corrente
         saveGrayscaleImage(filtered, precomputed_widths[i], precomputed_heights[i], out_path);
     }
     std::cout << "Immagini GPU salvate!" << std::endl;
 
-    // Cleanup finale
+    // *** FIX 6: Liberare TUTTA la memoria allocata (stream, device e host) ***
+    cudaStreamDestroy(stream);
     cudaFree(d_mega_input);
     cudaFree(d_mega_output);
     cudaFree(d_widths);
