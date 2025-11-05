@@ -91,8 +91,7 @@ CudaConvolutionProcessor::CudaConvolutionProcessor() {
                                   9 * sizeof(float)));
 }
 
-// Il distruttore è vuoto, dato che tutta la gestione
-// della memoria GPU è fatta esternamente nel main.
+// Il distruttore
 CudaConvolutionProcessor::~CudaConvolutionProcessor() {
 }
 
