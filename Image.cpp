@@ -2,12 +2,12 @@
 #include <stdexcept>
 #include <algorithm>
 #include <iostream>
-
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image.h"
 #include "stb_image_write.h"
 
+// Costruttore da file
 Image::Image(const std::string& filename) {
     int channels_in_file;
     data = stbi_load(filename.c_str(), &width, &height, &channels_in_file, 0);
@@ -18,32 +18,28 @@ Image::Image(const std::string& filename) {
 
     channels = channels_in_file;
 
-    std::cout << "Loaded image: " << filename
-              << " (" << width << "x" << height << ", " << channels << " channels)" << std::endl;
 }
 
-Image::Image(int w, int h, int c) : width(w), height(h), channels(c) {
-    size_t size = width * height * channels;
-    data = new unsigned char[size];
-}
-
+// Distruttore
 Image::~Image() {
     if (data) {
         stbi_image_free(data);
     }
 }
 
+// Costruttore di copia (usato da std::vector)
 Image::Image(const Image& other)
     : width(other.width), height(other.height), channels(other.channels) {
     size_t size = width * height * channels;
-    data = new unsigned char[size];
+    data = new unsigned char[size]; // Usa 'new' perché stbi_load usa malloc
     std::copy(other.data, other.data + size, data);
 }
 
+// Operatore di assegnazione (usato da std::vector)
 Image& Image::operator=(const Image& other) {
     if (this != &other) {
         if (data) {
-            stbi_image_free(data);
+            stbi_image_free(data); // Usa stbi_image_free se caricato con stbi_load
         }
 
         width = other.width;
@@ -57,6 +53,7 @@ Image& Image::operator=(const Image& other) {
     return *this;
 }
 
+// Conversione a grayscale
 std::vector<float> Image::toGrayscaleFloat() const {
     std::vector<float> grayscale(width * height);
 
@@ -68,6 +65,7 @@ std::vector<float> Image::toGrayscaleFloat() const {
             if (channels == 1) {
                 grayscale[idx] = static_cast<float>(data[pixel_idx]);
             } else if (channels >= 3) {
+                // Formula di luminanza standard
                 float r = static_cast<float>(data[pixel_idx]);
                 float g = static_cast<float>(data[pixel_idx + 1]);
                 float b = static_cast<float>(data[pixel_idx + 2]);
@@ -79,29 +77,6 @@ std::vector<float> Image::toGrayscaleFloat() const {
     return grayscale;
 }
 
-void Image::saveGrayscaleFloat(const std::vector<float>& grayscaleData,
-                              int width, int height, const std::string& filename) {
-    std::vector<unsigned char> imageData(width * height);
-
-    for (size_t i = 0; i < grayscaleData.size(); ++i) {
-        float value = grayscaleData[i];
-        // Clamp tra 0 e 255 e converti a unsigned char
-        value = std::max(0.0f, std::min(255.0f, value));
-        imageData[i] = static_cast<unsigned char>(value + 0.5f); // Rounded conversion
-    }
-
-    if (!stbi_write_png(filename.c_str(), width, height, 1, imageData.data(), width)) {
-        throw std::runtime_error("Failed to save image: " + filename);
-    }
-
-    std::cout << "Saved image: " << filename << std::endl;
-}
-
-bool Image::save(const std::string& filename) const {
-    return stbi_write_png(filename.c_str(), width, height, channels, data, width * channels);
-}
-
+// Metodi getter
 int Image::getWidth() const { return width; }
 int Image::getHeight() const { return height; }
-int Image::getChannels() const { return channels; }
-unsigned char* Image::getData() const { return data; }

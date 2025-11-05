@@ -3,18 +3,16 @@
 #include <stdexcept>
 
 // =====================================================
-// OTTIMIZZAZIONE 1: MEMORIA COSTANTE per il kernel
+// DEFINIZIONI GLOBALI E KERNEL
 // =====================================================
-// La memoria costante è cached e broadcast a tutti i thread in un warp
-// Ideale per il kernel di convoluzione che viene letto da tutti i thread
+
+// Il kernel viene copiato qui una sola volta all'avvio
 __constant__ float d_sharpen_kernel_const[9];
 
-// Definizione della costante statica host
+// Definizione del membro statico della classe
 constexpr float CudaConvolutionProcessor::sharpen_kernel[9];
 
-// =====================================================
-// MACRO per GESTIONE ERRORI ROBUSTA (OTTIMIZAZIONE 2)
-// =====================================================
+// Macro per la gestione degli errori CUDA
 #define CUDA_CHECK(call) \
 do { \
     cudaError_t err = call; \
@@ -25,15 +23,10 @@ do { \
     } \
 } while(0)
 
-
-
-
-// =====================================================
-// KERNEL  con SHARED MEMORY
-// =====================================================
+// Kernel CUDA "Mega-Batch" (Grid-Stride Loop) cuore del calcolo
 __global__ void convolutionMegaBatchKernel(const float* input, float* output,
-                                                    const size_t* widths, const size_t* heights,
-                                                    const size_t* offsets, int num_images) {
+                                            const size_t* widths, const size_t* heights,
+                                            const size_t* offsets, int num_images) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     int total_threads = gridDim.x * blockDim.x;
 
@@ -43,7 +36,7 @@ __global__ void convolutionMegaBatchKernel(const float* input, float* output,
     // Ogni thread processa più pixel con stride per massimizzare l'utilizzo
     for (size_t pixel_id = tid; pixel_id < total_pixels; pixel_id += total_threads) {
 
-        // Trova l'immagine a cui appartiene questo pixel (binary search sarebbe meglio, ma per 20 immagini va bene linear)
+        // Trova l'immagine a cui appartiene questo pixel
         int img_idx = 0;
         for (int i = 0; i < num_images - 1; ++i) {
             if (pixel_id >= offsets[i + 1]) {
@@ -86,51 +79,21 @@ __global__ void convolutionMegaBatchKernel(const float* input, float* output,
     }
 }
 
+// =====================================================
+// IMPLEMENTAZIONE METODI DELLA CLASSE
+// =====================================================
 
-CudaConvolutionProcessor::CudaConvolutionProcessor()
-    : d_input(nullptr), d_output(nullptr), d_kernel(nullptr),
-      max_width(0), max_height(0), initialized(false) {
-
+// Il costruttore si occupa solo di copiare il kernel
+// in memoria costante.
+CudaConvolutionProcessor::CudaConvolutionProcessor() {
     // Copia il kernel sharpen nella memoria costante (una sola volta!)
     CUDA_CHECK(cudaMemcpyToSymbol(d_sharpen_kernel_const, sharpen_kernel,
                                   9 * sizeof(float)));
 }
 
+// Il distruttore è vuoto, dato che tutta la gestione
+// della memoria GPU è fatta esternamente nel main.
 CudaConvolutionProcessor::~CudaConvolutionProcessor() {
-    cleanupGPUMemory();
-}
-
-void CudaConvolutionProcessor::initializeGPUMemory(size_t width, size_t height) {
-    if (initialized && width <= max_width && height <= max_height) {
-        return;
-    }
-
-    cleanupGPUMemory();
-
-    size_t image_size = width * height * sizeof(float);
-
-    CUDA_CHECK(cudaMalloc(&d_input, image_size));
-    CUDA_CHECK(cudaMalloc(&d_output, image_size));
-
-    max_width = width;
-    max_height = height;
-    initialized = true;
-}
-
-void CudaConvolutionProcessor::cleanupGPUMemory() {
-    if (d_input) {
-        cudaFree(d_input);
-        d_input = nullptr;
-    }
-    if (d_output) {
-        cudaFree(d_output);
-        d_output = nullptr;
-    }
-    if (d_kernel) {
-        cudaFree(d_kernel);
-        d_kernel = nullptr;
-    }
-    initialized = false;
 }
 
 void CudaConvolutionProcessor::applySharpenFilterMegaBatchPreallocated(
@@ -138,10 +101,12 @@ void CudaConvolutionProcessor::applySharpenFilterMegaBatchPreallocated(
     size_t* d_widths, size_t* d_heights, size_t* d_offsets,
     int num_images, int blocks, int threads_per_block) {
 
-    // Usa il kernel OTTIMIZZATO con memoria costante
+    // Lancia il kernel
     convolutionMegaBatchKernel<<<blocks, threads_per_block>>>(
         d_input, d_output,
         d_widths, d_heights, d_offsets, num_images);
 
+    // Sincronizza per assicurarsi che il kernel sia finito
+    // prima che il main continui a misurare il tempo.
     CUDA_CHECK(cudaDeviceSynchronize());
 }

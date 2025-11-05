@@ -74,7 +74,7 @@ void printComparison(const BenchmarkStats& cpu, const BenchmarkStats& cuda) {
     std::cout << "======================================================" << std::endl;
     if (cuda.avg_time_ms > 0) {
         double speedup = cpu.avg_time_ms / cuda.avg_time_ms;
-        std::cout << "\nSpeedup (CPU/CUDA): " << speedup << "x" << std::endl;
+        std::cout << "\nSpeedup: " << speedup << "x" << std::endl;
     }
 }
 
@@ -127,7 +127,7 @@ int main() {
     std::cout << "Caricamento completato. Pixel totali per run: " << total_pixels
               << " (" << total_pixels / 1000000.0 << " MP)" << std::endl;
 
-    std::cout << "\nPre-calcolo conversione grayscale..." << std::endl;
+    //std::cout << "\n calcolo conversione grayscale..." << std::endl;
     std::vector<std::vector<float>> precomputed_grayscale;
     std::vector<size_t> precomputed_widths, precomputed_heights, precomputed_offsets;
     size_t batch_total_pixels = 0;
@@ -146,7 +146,7 @@ int main() {
         std::copy(gray_img.begin(), gray_img.end(), mega_buffer.begin() + current_offset);
         current_offset += gray_img.size();
     }
-    std::cout << "Pre-calcolo completato!" << std::endl;
+    //std::cout << "calcolo completato!" << std::endl;
 
     // --- BENCHMARK CPU (SEQUENZIALE) ---
     std::cout << "\n=== CPU (Sequenziale) - " << NUM_ITERATIONS << " iterazioni ===" << std::endl;

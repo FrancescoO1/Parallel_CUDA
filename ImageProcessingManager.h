@@ -9,21 +9,11 @@ class ImageProcessingManager {
 private:
     ConvolutionProcessor processor;
 
-    struct ProcessingResult {
-        double execution_time_ms;
-        double throughput_mps;
-        size_t total_pixels;
-    };
-
 public:
 
-    // Getter per accesso diretto al processor (per benchmark ottimizzato)
+    // Getter per accesso diretto al processor
     ConvolutionProcessor& getProcessor() { return processor; }
 
-private:
-
-    void printDetailedResults(const std::vector<ProcessingResult>& results,
-                            const std::string& test_name);
 };
 
 #endif // IMAGE_PROCESSING_MANAGER_H

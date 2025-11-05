@@ -23,7 +23,7 @@ message(STATUS "CUDA version: ${CUDAToolkit_VERSION}")
 set(SOURCES
         Image.cpp
         CudaConvolutionProcessor.cu
-        main_benchmark.cpp
+        main.cpp
         ConvolutionProcessor.cpp
 )
 

@@ -1,7 +1,7 @@
 #include "ConvolutionProcessor.h"
 #include <algorithm>
 
-// Definizione del kernel statico - KERNEL SHARPEN ULTRA-AGGRESSIVO
+// Definizione del kernel statico
 const float ConvolutionProcessor::sharpen_kernel[9] = {
     -2.0f, -2.0f, -2.0f,
     -2.0f, 17.0f, -2.0f,
