@@ -25,6 +25,7 @@ set(SOURCES
         CudaConvolutionProcessor.cu
         main.cpp
         ConvolutionProcessor.cpp
+        BenchmarkExporter.h
 )
 
 # Crea l'eseguibile
