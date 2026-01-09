@@ -5,10 +5,9 @@
 #include <vector>
 #include <fstream>
 #include <iostream>
-#include <iomanip> // Per std::setw, std::setprecision, std::fixed
-#include "BenchmarkStats.h" // Assicurati che il percorso sia corretto
+#include <iomanip>
+#include "BenchmarkStats.h"
 
-// Struttura per contenere i risultati di UN SINGOLO test
 struct BenchmarkRun {
     int num_images;
     double total_megapixels;
@@ -23,14 +22,12 @@ private:
 public:
     BenchmarkExporter() = default;
 
-    // Aggiungi i risultati di un'esecuzione (es. 1, 5, 10 immagini)
     void addRun(int images, double megapixels,
                 const BenchmarkStats& cpu, const BenchmarkStats& cuda) {
         results.push_back({images, megapixels, cpu, cuda});
         std::cout << "\n -> Dati per " << images << " immagini registrati." << std::endl;
     }
 
-    // Stampa la tabella riassuntiva a console
     void printConsoleTable() const {
         if (results.empty()) {
             std::cout << "Nessun risultato da stampare." << std::endl;
@@ -41,7 +38,6 @@ public:
         std::cout << "| Img | MP      | CPU T(ms) | CUDA T(ms) | CPU Thr(MP/s) | CUDA Thr(MP/s) | Speedup |" << std::endl;
         std::cout << "|-----|---------|-----------|------------|---------------|----------------|---------|" << std::endl;
 
-        // Imposta la formattazione per std::cout
         std::cout << std::fixed << std::setprecision(2);
 
         for (const auto& run : results) {
@@ -59,7 +55,6 @@ public:
         std::cout << "==================================================================================================" << std::endl;
     }
 
-    // Esporta i dati in formato CSV per Excel/Gnuplot/Python
     bool exportToCSV(const std::string& filename) const {
         if (results.empty()) {
             std::cerr << "Nessun risultato da esportare." << std::endl;
@@ -72,11 +67,9 @@ public:
             return false;
         }
 
-        // Intestazione (Header)
         file << "NumImages,TotalMegapixels,CPUTimeMs,CPUStdDev,CPUThroughputMPS,";
         file << "CudaTimeMs,CudaStdDev,CudaThroughputMPS,Speedup\n";
 
-        // Dati
         for (const auto& run : results) {
             double speedup = (run.cuda_stats.avg_time_ms > 0.001) ?
                              (run.cpu_stats.avg_time_ms / run.cuda_stats.avg_time_ms) : 0.0;
@@ -98,4 +91,4 @@ public:
     }
 };
 
-#endif // BENCHMARK_EXPORTER_H
+#endif

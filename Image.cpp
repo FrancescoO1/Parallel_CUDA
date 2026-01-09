@@ -7,7 +7,6 @@
 #include "stb_image.h"
 #include "stb_image_write.h"
 
-// Costruttore da file
 Image::Image(const std::string& filename) {
     int channels_in_file;
     data = stbi_load(filename.c_str(), &width, &height, &channels_in_file, 0);
@@ -20,28 +19,24 @@ Image::Image(const std::string& filename) {
 
 }
 
-// Distruttore
 Image::~Image() {
     if (data) {
         stbi_image_free(data);
     }
 }
 
-// Costruttore di copia (usato da std::vector)
 Image::Image(const Image& other)
     : width(other.width), height(other.height), channels(other.channels) {
     size_t size = width * height * channels;
-    data = new unsigned char[size]; // Usa 'new' perché stbi_load usa malloc
+    data = new unsigned char[size];
     std::copy(other.data, other.data + size, data);
 }
 
-// Operatore di assegnazione (usato da std::vector)
 Image& Image::operator=(const Image& other) {
     if (this != &other) {
         if (data) {
-            stbi_image_free(data); // Usa stbi_image_free se caricato con stbi_load
+            stbi_image_free(data);
         }
-
         width = other.width;
         height = other.height;
         channels = other.channels;
@@ -53,7 +48,6 @@ Image& Image::operator=(const Image& other) {
     return *this;
 }
 
-// Conversione a grayscale
 std::vector<float> Image::toGrayscaleFloat() const {
     std::vector<float> grayscale(width * height);
 
@@ -65,7 +59,6 @@ std::vector<float> Image::toGrayscaleFloat() const {
             if (channels == 1) {
                 grayscale[idx] = static_cast<float>(data[pixel_idx]);
             } else if (channels >= 3) {
-                // Formula di luminanza standard
                 float r = static_cast<float>(data[pixel_idx]);
                 float g = static_cast<float>(data[pixel_idx + 1]);
                 float b = static_cast<float>(data[pixel_idx + 2]);
@@ -77,6 +70,5 @@ std::vector<float> Image::toGrayscaleFloat() const {
     return grayscale;
 }
 
-// Metodi getter
 int Image::getWidth() const { return width; }
 int Image::getHeight() const { return height; }

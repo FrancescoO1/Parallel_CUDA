@@ -4,3 +4,9 @@
 /immagini_output_gpu
 /cmake-build-debug
 /4k_IMG
+/grafici
+
+environment.yml
+stb_image.h
+stb_image_write.h
+benchmark_results.csv

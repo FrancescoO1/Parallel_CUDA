@@ -7,5 +7,5 @@ struct BenchmarkStats {
     double avg_throughput_mps;
 };
 
-#endif // BENCHMARK_STATS_H
+#endif
 

@@ -5,7 +5,6 @@
 
 class CudaConvolutionProcessor {
 private:
-    // Kernel di sharpening 3x3
     static constexpr float sharpen_kernel[9] = {
         -2.0f, -2.0f, -2.0f,
         -2.0f, 17.0f, -2.0f,
@@ -16,11 +15,9 @@ public:
     CudaConvolutionProcessor();
     ~CudaConvolutionProcessor();
 
-    // Disabilita copy constructor e assignment operator
     CudaConvolutionProcessor(const CudaConvolutionProcessor&) = delete;
     CudaConvolutionProcessor& operator=(const CudaConvolutionProcessor&) = delete;
 
-    // Versione ottimizzata con memoria pre-allocata (zero overhead)
     void applySharpenFilterMegaBatchPreallocated(
         float* d_input, float* d_output,
         size_t* d_widths, size_t* d_heights, size_t* d_offsets,
@@ -28,4 +25,4 @@ public:
 
 };
 
-#endif // CUDA_CONVOLUTION_PROCESSOR_H
+#endif

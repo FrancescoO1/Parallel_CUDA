@@ -10,9 +10,7 @@ private:
     CudaConvolutionProcessor processor;
 
 public:
-
-    // Getter per accesso diretto al processor (per benchmark ottimizzato)
     CudaConvolutionProcessor& getProcessor() { return processor; }
 };
 
-#endif // CUDA_IMAGE_PROCESSING_MANAGER_H
+#endif

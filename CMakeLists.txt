@@ -28,8 +28,20 @@ set(SOURCES
         BenchmarkExporter.h
 )
 
-# Crea l'eseguibile
-add_executable(${PROJECT_NAME} ${SOURCES})
+set(HEADERS
+        Image.h
+        ConvolutionProcessor.h
+        CudaConvolutionProcessor.h
+        ImageProcessingManager.h
+        CudaImageProcessingManager.h
+        BenchmarkStats.h
+        BenchmarkExporter.h
+        stb_image.h
+        stb_image_write.h
+)
+
+# crea l'eseguibile
+add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
 
 # Imposta le proprietà CUDA
 set_target_properties(${PROJECT_NAME} PROPERTIES

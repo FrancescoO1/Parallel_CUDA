@@ -1,7 +1,6 @@
 #include "ConvolutionProcessor.h"
 #include <algorithm>
 
-// Definizione del kernel statico
 const float ConvolutionProcessor::sharpen_kernel[9] = {
     -2.0f, -2.0f, -2.0f,
     -2.0f, 17.0f, -2.0f,
@@ -17,7 +16,6 @@ std::vector<float> ConvolutionProcessor::applySharpenFilter(
         for (size_t x = 0; x < width; ++x) {
             size_t idx = y * width + x;
 
-            // Copia i pixel dei bordi senza applicare la convoluzione
             if (x == 0 || x == width - 1 || y == 0 || y == height - 1) {
                 result[idx] = image[idx];
             } else {
@@ -45,6 +43,5 @@ float ConvolutionProcessor::applyKernel(const std::vector<float>& image,
         }
     }
 
-    // Clamp il risultato tra 0 e 255
     return std::max(0.0f, std::min(255.0f, sum));
 }

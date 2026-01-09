@@ -5,7 +5,6 @@
 
 class ConvolutionProcessor {
 private:
-    // Kernel di sharpening 3x3
     static const float sharpen_kernel[9];
 
 public:
@@ -21,4 +20,4 @@ private:
                      size_t width, size_t height) const;
 };
 
-#endif // CONVOLUTION_PROCESSOR_H
+#endif
